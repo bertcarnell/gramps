@@ -53,6 +53,7 @@ from gramps.gen.const import HOME_DIR, URL_WIKISTRING
 from gramps.gen.datehandler import get_date_formats
 from gramps.gen.display.name import displayer as _nd
 from gramps.gen.display.name import NameDisplayError
+from gramps.gen.display.place import displayer as _pd
 from gramps.gen.utils.alive import update_constants
 from gramps.gen.utils.file import media_path
 from gramps.gen.utils.keyword import (get_keywords, get_translation_from_keyword,
@@ -62,6 +63,7 @@ from gramps.gen.lib import Name, Surname, NameOriginType
 from .managedwindow import ManagedWindow
 from .widgets import MarkupLabel, BasicLabel
 from .dialog import ErrorDialog, QuestionDialog2, OkDialog
+from .editors.editplaceformat import EditPlaceFormat
 from .glade import Glade
 from gramps.gen.plug.utils import available_updates
 from .plug import PluginWindows
@@ -249,13 +251,23 @@ class ConfigureDialog(ManagedWindow):
         """
         self.__config.set(constant, obj.get_text())
 
-    def update_color(self, obj, constant, color_hex_label):
+    def update_color(self, obj, pspec, constant, color_hex_label):
+        """
+        Called on changing some color.
+        Either on programmatically color change.
+        """
         rgba = obj.get_rgba()
         hexval = "#%02x%02x%02x" % (int(rgba.red * 255),
                                     int(rgba.green * 255),
                                     int(rgba.blue * 255))
         color_hex_label.set_text(hexval)
-        self.__config.set(constant, hexval)
+        colors = self.__config.get(constant)
+        if isinstance(colors, list):
+            scheme = self.__config.get('colors.scheme')
+            colors[scheme] = hexval
+            self.__config.set(constant, colors)
+        else:
+            self.__config.set(constant, hexval)
 
     def update_checkbox(self, obj, constant, config=None):
         if not config:
@@ -383,15 +395,24 @@ class ConfigureDialog(ManagedWindow):
         grid.attach(entry, col_attach+1, index, 1, 1)
 
     def add_color(self, grid, label, index, constant, config=None, col=0):
+        """
+        Add color chooser widget with label to the grid.
+        """
         if not config:
             config = self.__config
         lwidget = BasicLabel(_("%s: ") % label) # needed for French, else ignore
-        hexval = config.get(constant)
+        colors = config.get(constant)
+        if isinstance(colors, list):
+            scheme = config.get('colors.scheme')
+            hexval = colors[scheme]
+        else:
+            hexval = colors
         color = Gdk.color_parse(hexval)
         entry = Gtk.ColorButton(color=color)
         color_hex_label = BasicLabel(hexval)
         color_hex_label.set_hexpand(True)
-        entry.connect('color-set', self.update_color, constant, color_hex_label)
+        entry.connect('notify::color', self.update_color, constant,
+                      color_hex_label)
         grid.attach(lwidget, col, index, 1, 1)
         grid.attach(entry, col+1, index, 1, 1)
         grid.attach(color_hex_label, col+2, index, 1, 1)
@@ -492,7 +513,6 @@ class GrampsPreferences(ConfigureDialog):
             self.add_behavior_panel,
             self.add_famtree_panel,
             self.add_formats_panel,
-            self.add_places_panel,
             self.add_text_panel,
             self.add_prefix_panel,
             self.add_date_panel,
@@ -554,7 +574,7 @@ class GrampsPreferences(ConfigureDialog):
 
     def add_color_panel(self, configdialog):
         """
-        Add the tab to set defaults colors for graph boxes
+        Add the tab to set defaults colors for graph boxes.
         """
         grid = Gtk.Grid()
         grid.set_border_width(12)
@@ -562,39 +582,61 @@ class GrampsPreferences(ConfigureDialog):
         grid.set_row_spacing(6)
         self.add_text(grid, _('Set the colors used for boxes in the graphical views'),
                         0, line_wrap=False)
-        self.add_color(grid, _('Gender Male Alive'), 1,
-                        'preferences.color-gender-male-alive')
-        self.add_color(grid, _('Border Male Alive'), 2,
-                        'preferences.bordercolor-gender-male-alive')
-        self.add_color(grid, _('Gender Male Death'), 3,
-                        'preferences.color-gender-male-death')
-        self.add_color(grid, _('Border Male Death'), 4,
-                        'preferences.bordercolor-gender-male-death')
-        self.add_color(grid, _('Gender Female Alive'), 1,
-                        'preferences.color-gender-female-alive', col=4)
-        self.add_color(grid, _('Border Female Alive'), 2,
-                        'preferences.bordercolor-gender-female-alive', col=4)
-        self.add_color(grid, _('Gender Female Death'), 3,
-                        'preferences.color-gender-female-death', col=4)
-        self.add_color(grid, _('Border Female Death'), 4,
-                        'preferences.bordercolor-gender-female-death', col=4)
-##        self.add_color(grid, _('Gender Other Alive'), 5,
-##                        'preferences.color-gender-other-alive')
-##        self.add_color(grid, _('Border Other Alive'), 6,
-##                        'preferences.bordercolor-gender-other-alive')
-##        self.add_color(grid, _('Gender Other Death'), 7,
-##                        'preferences.color-gender-other-death')
-##        self.add_color(grid, _('Border Other Death'), 8,
-##                        'preferences.bordercolor-gender-other-death')
-        self.add_color(grid, _('Gender Unknown Alive'), 5,
-                        'preferences.color-gender-unknown-alive', col=4)
-        self.add_color(grid, _('Border Unknown Alive'), 6,
-                        'preferences.bordercolor-gender-unknown-alive', col=4)
-        self.add_color(grid, _('Gender Unknown Death'), 7,
-                        'preferences.color-gender-unknown-death', col=4)
-        self.add_color(grid, _('Border Unknown Death'), 8,
-                        'preferences.bordercolor-gender-unknown-death', col=4)
+
+        hbox = Gtk.Box(spacing=12)
+        self.color_scheme_box = Gtk.ComboBoxText()
+        formats = [_("Light colors"),
+                   _("Dark colors"),]
+        list(map(self.color_scheme_box.append_text, formats))
+        scheme = config.get('colors.scheme')
+        self.color_scheme_box.set_active(scheme)
+        self.color_scheme_box.connect('changed', self.color_scheme_changed)
+        lwidget = BasicLabel(_("%s: ") % _('Color scheme'))
+        hbox.pack_start(lwidget, False, False, 0)
+        hbox.pack_start(self.color_scheme_box, False, False, 0)
+
+        restore_btn = Gtk.Button(_('Restore to defaults'))
+        restore_btn.connect('clicked', self.restore_colors)
+        hbox.pack_start(restore_btn, False, False, 0)
+        grid.attach(hbox, 1, 1, 6, 1)
+
+        color_list = [
+            (_('Male Alive'), 'male-alive', 2, 0),
+            (_('Male Dead'), 'male-dead', 4, 0),
+            (_('Female Alive'), 'female-alive', 2, 4),
+            (_('Female Dead'), 'female-dead', 4, 4),
+            (_('Unknown Alive'), 'unknown-alive', 6, 4),
+            (_('Unknown Dead'), 'unknown-dead', 8, 4),
+            (_('Family Node'), 'family', 7, 0),
+            (_('Family Divorced'), 'family-divorced', 9, 0),
+            (_('Home Person'), 'home-person', 6, 0),
+            (_('Border Male Alive'), 'border-male-alive', 3, 0),
+            (_('Border Male Dead'), 'border-male-dead', 5, 0),
+            (_('Border Female Alive'), 'border-female-alive', 3, 4),
+            (_('Border Female Dead'), 'border-female-dead', 5, 4),
+            (_('Border Unknown Alive'), 'border-unknown-alive', 7, 4),
+            (_('Border Unknown Dead'), 'border-unknown-dead', 9, 4),
+            (_('Border Family'), 'border-family', 8, 0),
+            (_('Border Family Divorced'), 'border-family-divorced', 10, 0),
+            ]
+
+        self.colors = {}
+        for color in color_list:
+            pref_name = 'colors.' + color[1]
+            self.colors[pref_name] = self.add_color(grid, color[0], color[2],
+                                                    pref_name, col=color[3])
         return _('Colors'), grid
+
+    def restore_colors(self, widget=None):
+        """
+        Restore colors of selected scheme to default.
+        """
+        scheme = config.get('colors.scheme')
+        for key, widget in self.colors.items():
+            color = Gdk.RGBA()
+            hexval = config.get_default(key)[scheme]
+            Gdk.RGBA.parse(color, hexval)
+            widget.set_rgba(color)
 
     def add_advanced_panel(self, configdialog):
         grid = Gtk.Grid()
@@ -890,6 +932,13 @@ class GrampsPreferences(ConfigureDialog):
         _nd.set_default_format(new_idx)
         self.uistate.emit('nameformat-changed')
 
+    def cb_place_fmt_changed(self, obj):
+        """
+        Called when the place format is changed.
+        """
+        config.set('preferences.place-format', obj.get_active())
+        self.uistate.emit('placeformat-changed')
+
     def cb_pa_sur_changed(self,*args):
         """
         checkbox patronymic as surname changed, propagate to namedisplayer
@@ -1011,6 +1060,34 @@ class GrampsPreferences(ConfigureDialog):
         grid.attach(obox, 1, row, 2, 1)
         row += 1
 
+        # Place format:
+        self.pformat = Gtk.ComboBox()
+        renderer = Gtk.CellRendererText()
+        self.pformat.pack_start(renderer, True)
+        self.pformat.add_attribute(renderer, "text", 0)
+        self.cb_place_fmt_rebuild()
+        active = config.get('preferences.place-format')
+        self.pformat.set_active(active)
+        self.pformat.connect('changed', self.cb_place_fmt_changed)
+        lwidget = BasicLabel(_("%s: ") % _('Place format'))
+        lwidget.set_use_underline(True)
+        lwidget.set_mnemonic_widget(obox)
+        hbox = Gtk.Box()
+        self.fmt_btn = Gtk.Button(label=("%s..." % _('Edit')))
+        self.fmt_btn.connect('clicked', self.cb_place_fmt_dialog)
+        hbox.pack_start(self.pformat, True, True, 0)
+        hbox.pack_start(self.fmt_btn, False, False, 0)
+        grid.attach(lwidget, 0, row, 1, 1)
+        grid.attach(hbox, 1, row, 2, 1)
+        row += 1
+
+        auto = self.add_checkbox(grid,
+                                _("Enable automatic place title generation"),
+                                row, 'preferences.place-auto',
+                                extra_callback=self.auto_title_changed)
+        self.auto_title_changed(auto)
+        row += 1
+
         # Age precision:
         # precision=1 for "year", 2: "year, month" or 3: "year, month, days"
         obox = Gtk.ComboBoxText()
@@ -1110,66 +1187,13 @@ class GrampsPreferences(ConfigureDialog):
         row += 1
         return _('Display'), grid
 
-    def add_places_panel(self, configdialog):
-        grid = Gtk.Grid()
-        grid.set_border_width(12)
-        grid.set_column_spacing(6)
-        grid.set_row_spacing(6)
-
-        auto = self.add_checkbox(grid,
-                                _("Enable automatic place title generation"),
-                                0, 'preferences.place-auto',
-                                extra_callback=self.auto_title_changed)
-
-        row = 0
-        grid2 = Gtk.Grid()
-        grid2.set_border_width(12)
-        grid2.set_column_spacing(6)
-        grid2.set_row_spacing(6)
-        grid.attach(grid2, 1, 1, 1, 1)
-
-        self.place_widgets = []
-        cbox = self.add_checkbox(grid2, _("Suppress comma after house number"),
-                                 row, 'preferences.place-number', start=0)
-        self.place_widgets.append(cbox)
-        row += 1
-
-        cbox = self.add_checkbox(grid2, _("Reverse display order"),
-                                 row, 'preferences.place-reverse', start=0)
-        self.place_widgets.append(cbox)
-        row += 1
-
-        # Place restriction
-        obox = Gtk.ComboBoxText()
-        formats = [_("Full place name"),
-                   _("-> Hamlet/Village/Town/City"),
-                   _("Hamlet/Village/Town/City ->")]
-        list(map(obox.append_text, formats))
-        active = config.get('preferences.place-restrict')
-        obox.set_active(active)
-        obox.connect('changed', self.place_restrict_changed)
-        lwidget = BasicLabel(_("%s: ") % _('Restrict'))
-        grid2.attach(lwidget, 0, row, 1, 1)
-        grid2.attach(obox, 1, row, 2, 1)
-        self.place_widgets.append(obox)
-        row += 1
-
-        entry = self.add_entry(grid2, _("Language"),
-                               row, 'preferences.place-lang')
-        self.place_widgets.append(entry)
-        row += 1
-
-        self.auto_title_changed(auto)
-
-        return _('Places'), grid
-
     def auto_title_changed(self, obj):
         """
-        Update sensitivity of place configuration widgets.
+        Update sensitivity of place format widget.
         """
-        active = obj.get_active()
-        for widget in self.place_widgets:
-            widget.set_sensitive(active)
+        active = config.get('preferences.place-auto')
+        self.pformat.set_sensitive(active)
+        self.fmt_btn.set_sensitive(active)
 
     def add_text_panel(self, configdialog):
         row = 0
@@ -1205,6 +1229,35 @@ class GrampsPreferences(ConfigureDialog):
         self.old_format = the_list.get_value(the_iter, COL_FMT)
         win = DisplayNameEditor(self.uistate, self.dbstate, self.track, self)
 
+    def color_scheme_changed(self, obj):
+        """
+        Called on swiching color scheme.
+        """
+        scheme = obj.get_active()
+        config.set('colors.scheme', scheme)
+        for key, widget in self.colors.items():
+            color = Gdk.RGBA()
+            hexval = config.get(key)[scheme]
+            Gdk.RGBA.parse(color, hexval)
+            widget.set_rgba(color)
+
+    def cb_place_fmt_dialog(self, button):
+        """
+        Called to invoke the place format editor.
+        """
+        EditPlaceFormat(self.uistate, self.dbstate, self.track,
+                        self.cb_place_fmt_rebuild)
+
+    def cb_place_fmt_rebuild(self):
+        """
+        Called to rebuild the place format list.
+        """
+        model = Gtk.ListStore(str)
+        for fmt in _pd.get_formats():
+            model.append([fmt.name])
+        self.pformat.set_model(model)
+        self.pformat.set_active(0)
+
     def check_for_type_changed(self, obj):
         active = obj.get_active()
         if active == 0:  # update
@@ -1227,10 +1280,6 @@ class GrampsPreferences(ConfigureDialog):
     def check_for_updates_changed(self, obj):
         active = obj.get_active()
         config.set('behavior.check-for-addon-updates', active)
-
-    def place_restrict_changed(self, obj):
-        active = obj.get_active()
-        config.set('preferences.place-restrict', active)
 
     def date_format_changed(self, obj):
         config.set('preferences.date-format', obj.get_active())

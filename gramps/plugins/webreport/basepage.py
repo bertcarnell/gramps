@@ -628,17 +628,25 @@ class BasePage: # pylint: disable=C1001
         """
         creates the event header row for all events
         """
-        trow = Html("tr")
+        trow = Html("tr", close=None)
         trow.extend(
             Html("th", trans, class_=colclass, inline=True)
             for trans, colclass in  [
                 (self._("Event"), "ColumnEvent"),
                 (self._("Date"), "ColumnDate"),
                 (self._("Place"), "ColumnPlace"),
-                (self._("Description"), "ColumnDescription"),
-                (self._("Notes"), "ColumnNotes"),
-                (self._("Sources"), "ColumnSources")]
+                (self._("Description"), "ColumnDescription")]
         )
+        trow += Html("/tr", close=None)
+        trow2 = Html("tr", indent=False)
+        trow2.extend(
+            Html("th", trans, class_=colclass, colspan=opt, inline=True)
+            for trans, colclass, opt in  [
+                ("", "ColumnEvent", 1),
+                (self._("Sources"), "ColumnSources", 1),
+                (self._("Notes"), "ColumnNotes", 2)]
+        )
+        trow.extend(trow2)
         return trow
 
     def display_event_row(self, event, event_ref, place_lat_long,
@@ -688,6 +696,12 @@ class BasePage: # pylint: disable=C1001
             for (label, colclass, data) in event_data
         )
 
+        trow2 = Html("tr")
+        trow2 += Html("td", "", class_="ColumnSources")
+        # get event source references
+        srcrefs = self.get_citation_links(event.get_citation_list()) or "&nbsp;"
+        trow2 += Html("td", srcrefs, class_="ColumnSources")
+
         # get event notes
         notelist = event.get_note_list()
         notelist.extend(event_ref.get_note_list())
@@ -709,12 +723,9 @@ class BasePage: # pylint: disable=C1001
             if notelist:
                 htmllist.extend(self.dump_notes(notelist))
 
-        trow += Html("td", htmllist, class_="ColumnNotes")
+        trow2 += Html("td", htmllist, class_="ColumnNotes", colspan=2)
 
-        # get event source references
-        srcrefs = self.get_citation_links(event.get_citation_list()) or "&nbsp;"
-        trow += Html("td", srcrefs, class_="ColumnSources")
-
+        trow += trow2
         # return events table row to its callers
         return trow
 
@@ -1301,9 +1312,8 @@ class BasePage: # pylint: disable=C1001
                 msg += self._('Last change was the %(date)s') % {'date' :
                                                                  last_modif}
             else:
-                dat_txt = ' on %(date)s' % {'date' :
-                                            self.rlocale.get_date(Today())}
-                msg += self._(dat_txt)
+                dat_txt = self._(' on %(date)s')
+                msg += dat_txt % {'date' : self.rlocale.get_date(Today())}
 
             origin1 = self.report.filter.get_name(self.rlocale)
             filt_number = self.report.options['filter']
@@ -1502,7 +1512,7 @@ class BasePage: # pylint: disable=C1001
             ("addressbook", self._("Address Book"),
              self.report.inc_addressbook),
             ('contact', self._("Contact"), self.report.use_contact),
-            ('statistics', self._("Statistics"), True),
+            ('statistics', self._("Statistics"), self.report.inc_stats),
             (self.target_cal_uri, self._("Web Calendar"), self.usecal)
         ]
 
@@ -2567,6 +2577,44 @@ class BasePage: # pylint: disable=C1001
                 )
                 tbody += trow
 
+        # display all related locations
+        for placeref in place.get_placeref_list():
+            place_date = self.rlocale.get_date(placeref.get_date_object())
+            if place_date != "":
+                parent_place = self.r_db.get_place_from_handle(placeref.ref)
+                parent_name = parent_place.get_name().get_value()
+                trow = Html('tr') + (
+                    Html("td", self._("Locations"), class_="ColumnAttribute",
+                         inline=True),
+                    Html("td", parent_name, class_="ColumnValue", inline=True),
+                    Html("td", place_date, class_="ColumnValue", inline=True)
+                )
+                tbody += trow
+
+        altloc = place.get_alternative_names()
+        if altloc:
+            tbody += Html("tr") + Html("td", "&nbsp;", colspan=2)
+            trow = Html("tr") + (
+                Html("th", self._("Alternate Names"), colspan=1,
+                     class_="ColumnAttribute", inline=True),
+                Html("th", self._("Language"), colspan=1,
+                     class_="ColumnAttribute", inline=True),
+                Html("th", self._("Date range in which the name is valid."), colspan=1,
+                     class_="ColumnAttribute", inline=True),
+            )
+            tbody += trow
+            for loc in altloc:
+                place_date = self.rlocale.get_date(loc.date)
+                trow = Html("tr") + (
+                    Html("td", loc.get_value(), class_="ColumnValue",
+                         inline=True),
+                    Html("td", loc.get_language(), class_="ColumnValue",
+                         inline=True),
+                    Html("td", place_date, class_="ColumnValue",
+                         inline=True),
+                )
+                tbody += trow
+
         altloc = place.get_alternate_locations()
         if altloc:
             tbody += Html("tr") + Html("td", "&nbsp;", colspan=2)
@@ -2593,20 +2641,6 @@ class BasePage: # pylint: disable=C1001
                         )
                         tbody += trow
                 tbody += Html("tr") + Html("td", "&nbsp;", colspan=2)
-
-        # display all related locations
-        for placeref in place.get_placeref_list():
-            place_date = self.rlocale.get_date(placeref.get_date_object())
-            if place_date != "":
-                parent_place = self.r_db.get_place_from_handle(placeref.ref)
-                parent_name = parent_place.get_name().get_value()
-                trow = Html('tr') + (
-                    Html("td", self._("Locations"), class_="ColumnAttribute",
-                         inline=True),
-                    Html("td", parent_name, class_="ColumnValue", inline=True),
-                    Html("td", place_date, class_="ColumnValue", inline=True)
-                )
-                tbody += trow
 
         # return place table to its callers
         return table
